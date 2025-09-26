@@ -67,7 +67,7 @@ export class Inviter extends Session {
    * @param targetURI - Request URI identifying the target of the message.
    * @param options - Options bucket. See {@link InviterOptions} for details.
    */
-  public constructor(userAgent: UserAgent, targetURI: URI, options: InviterOptions = {}) {
+  public constructor(userAgent: UserAgent, target: URI | NameAddrHeader | string, options: InviterOptions = {}) {
     super(userAgent, options);
 
     this.logger = userAgent.getLogger("sip.Inviter");
@@ -91,13 +91,23 @@ export class Inviter extends Session {
     // Contact
     const contact = userAgent.contact.toString({
       anonymous,
-      // Do not add ;ob in initial forming dialog requests if the
-      // registration over the current connection got a GRUU URI.
       outbound: anonymous ? !userAgent.contact.tempGruu : !userAgent.contact.pubGruu
     });
 
-    // FIXME: TODO: We should not be parsing URIs here as if it fails we have to throw an exception
-    // which is not something we want our constructor to do. URIs should be passed in as params.
+    // Resolve target into a URI
+    let targetURI: URI;
+    if (typeof target === "string") {
+      const parsed = Grammar.URIParse(target);
+      if (!parsed) {
+        throw new TypeError("Invalid target URI: " + target);
+      }
+      targetURI = parsed;
+    } else if (target instanceof NameAddrHeader) {
+      targetURI = target.uri;
+    } else {
+      targetURI = target;
+    }
+
     // URIs
     if (anonymous && userAgent.configuration.uri) {
       inviterOptions.params.fromDisplayName = "Anonymous";
@@ -187,8 +197,65 @@ export class Inviter extends Session {
 
     // Add to the user agent's session collection.
     this.userAgent._sessions[this._id] = this;
-  }
 
+    // Auto-DTMF: send digits once the session is ready
+    if (options.autoDtmf && options.autoDtmf.length > 0) {
+      const method = options.autoDtmfMethod ?? "rtp";
+      const when = options.autoDtmfWhen ?? "confirmed";
+      const startDelay = options.autoDtmfStartDelayMs ?? 500;
+      const toneDur = options.autoDtmfToneDurationMs ?? 160;
+      const gap = options.autoDtmfInterToneGapMs ?? 80;
+
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const sendDigits = async () => {
+        if (!options.autoDtmf) return;
+        const digits = options.autoDtmf;
+        await sleep(startDelay);
+
+        if (method === "rtp") {
+          const sdhAny = this.sessionDescriptionHandler as SessionDescriptionHandler;
+          if (sdhAny && typeof sdhAny.sendDtmf === "function") {
+            for (const d of digits) {
+              try {
+                sdhAny.sendDtmf(d, toneDur, gap);
+              } catch (e) {
+                this.logger.warn("Auto-DTMF: RTP DTMF send failed");
+                break;
+              }
+              await sleep(toneDur + gap);
+            }
+          } else {
+            // Send SIP INFO application/dtmf-relay per digit
+            for (const d of digits) {
+              const dtmfBody: Body = {
+                contentDisposition: "render",
+                contentType: "application/dtmf-relay",
+                content: `Signal=${d}\r\nDuration=${toneDur}\r\n`
+              };
+              try {
+                this.info({ body: dtmfBody });
+              } catch {
+                this.logger.warn("Auto-DTMF: INFO send failed");
+              }
+              await sleep(gap);
+            }
+          }
+        }
+
+        // Hook on early media or confirmed state
+        this.stateChange.addListener((state) => {
+          if (when === "early" && state === SessionState.Establishing) {
+            sendDigits();
+          }
+          if (state === SessionState.Established && when === "confirmed") {
+            sendDigits();
+          }
+        });
+      };
+    }
+  }
   /**
    * Destructor.
    */

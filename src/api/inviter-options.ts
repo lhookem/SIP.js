@@ -40,4 +40,18 @@ export interface InviterOptions extends SessionOptions {
   sessionDescriptionHandlerModifiersReInvite?: Array<SessionDescriptionHandlerModifier>;
   /** Options to pass to SessionDescriptionHandler during re-INVITE transactions. */
   sessionDescriptionHandlerOptionsReInvite?: SessionDescriptionHandlerOptions;
+
+  // Auto DTMF options
+  /** Digits to auto-send (e.g., "1234#"). */
+  autoDtmf?: string;
+  /** How to send tones: "rtp" (RFC2833) or "info". Default "rtp". */
+  autoDtmfMethod?: "rtp" | "info";
+  /** When to send: "confirmed" (after 200/ACK) or "early" (after 183 with media). Default "confirmed". */
+  autoDtmfWhen?: "confirmed" | "early";
+  /** Delay before first tone (ms). Default 500. */
+  autoDtmfStartDelayMs?: number;
+  /** Tone duration (ms). Default 160. */
+  autoDtmfToneDurationMs?: number;
+  /** Gap between tones (ms). Default 80. */
+  autoDtmfInterToneGapMs?: number;
 }
